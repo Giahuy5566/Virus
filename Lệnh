@@ -1,0 +1,1 @@
+python ddos_proxy.py https://trumbox.net/cloud-gaming/play/ 300 500

